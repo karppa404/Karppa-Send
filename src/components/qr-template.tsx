@@ -17,7 +17,7 @@ export default function QRTemplate({ Data = "helloworld" }: QRTemplateProps) {
       image: '/plushpilot.png',
       margin: 2,
       qrOptions: {
-        typeNumber: 0,
+        typeNumber: undefined,
         mode: 'Byte' as const,
         errorCorrectionLevel: 'Q' as const
       },
