@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import QRCodeStyling from "qr-code-styling";
+import type { TypeNumber } from "qr-code-styling";
 interface QRTemplateProps {
   Data: string;
 }
-
 export default function QRTemplate({ Data = "helloworld" }: QRTemplateProps) {
   const ref = useRef<HTMLDivElement>(null);
   const [qrCode, setQrCode] = useState<QRCodeStyling | null>(null);
@@ -17,7 +17,7 @@ export default function QRTemplate({ Data = "helloworld" }: QRTemplateProps) {
       image: '/plushpilot.png',
       margin: 2,
       qrOptions: {
-        typeNumber: undefined,
+        typeNumber: 0 as TypeNumber,
         mode: 'Byte' as const,
         errorCorrectionLevel: 'Q' as const
       },
