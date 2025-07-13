@@ -26,7 +26,7 @@ export default function QRTemplate({ Data = "helloworld" }: QRTemplateProps) {
         imageSize: 0.4,
         margin: 0,
         crossOrigin: 'anonymous' as const,
-        
+
       },
       dotsOptions: {
         color: '#222222',
@@ -59,10 +59,6 @@ export default function QRTemplate({ Data = "helloworld" }: QRTemplateProps) {
   }, [qrCode]);
 
   return (
-  <div className="rounded-xl">
-
     <div ref={ref} className="flex justify-self-center" />
-  </div>
-
   );
 }

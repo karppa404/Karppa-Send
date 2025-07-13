@@ -6,7 +6,7 @@ export interface FileTransferData {
   fileSize?: number;
   totalChunks?: number;
   chunkIndex?: number;
-  data?: ArrayBuffer;
+  data?: string; // Base64 encoded data
 }
 
 export interface TransferStats {
@@ -16,17 +16,28 @@ export interface TransferStats {
   startTime: number;
   isActive: boolean;
   direction: 'sending' | 'receiving';
+  progress: number; // percentage
+}
+
+export interface ConnectionInfo {
+  sessionId: string;
+  isInitiator: boolean;
+  isConnected: boolean;
+  connectionState: 'disconnected' | 'connecting' | 'connected' | 'failed';
 }
 
 export class WebRTCService {
   private peer: SimplePeer.Instance | null = null;
-  private ws: WebSocket | null = null;
   private sessionId: string = '';
   private isInitiator: boolean = false;
+  private connectionInfo: ConnectionInfo;
+  
+  // Event callbacks
   private onPeerConnected: (() => void) | null = null;
   private onPeerDisconnected: (() => void) | null = null;
   private onFileReceived: ((fileName: string, data: ArrayBuffer) => void) | null = null;
   private onTransferProgress: ((stats: TransferStats) => void) | null = null;
+  private onConnectionStateChange: ((info: ConnectionInfo) => void) | null = null;
   
   private currentTransfer: {
     fileName: string;
@@ -36,19 +47,35 @@ export class WebRTCService {
     stats: TransferStats;
   } | null = null;
 
+  // Store signaling data for manual exchange
+  private signalData: any = null;
+  private onSignalData: ((data: any) => void) | null = null;
+
   constructor() {
-    this.setupWebSocket();
+    this.connectionInfo = {
+      sessionId: '',
+      isInitiator: false,
+      isConnected: false,
+      connectionState: 'disconnected'
+    };
   }
 
-  private setupWebSocket() {
-    // This would connect to your signaling server
-    // For demo purposes, we'll simulate peer connection
-    console.log('WebSocket setup - would connect to signaling server');
+  private updateConnectionState(state: ConnectionInfo['connectionState']) {
+    this.connectionInfo.connectionState = state;
+    this.connectionInfo.isConnected = state === 'connected';
+    
+    if (this.onConnectionStateChange) {
+      this.onConnectionStateChange({ ...this.connectionInfo });
+    }
   }
 
   async createSession(sessionId: string): Promise<void> {
     this.sessionId = sessionId;
     this.isInitiator = true;
+    this.connectionInfo.sessionId = sessionId;
+    this.connectionInfo.isInitiator = true;
+    
+    this.updateConnectionState('connecting');
     
     this.peer = new SimplePeer({
       initiator: true,
@@ -56,17 +83,37 @@ export class WebRTCService {
       config: {
         iceServers: [
           { urls: 'stun:stun.l.google.com:19302' },
-          { urls: 'stun:stun1.l.google.com:19302' }
+          { urls: 'stun:stun1.l.google.com:19302' },
+          { urls: 'stun:stun2.l.google.com:19302' }
         ]
       }
     });
 
     this.setupPeerEvents();
+    
+    return new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        reject(new Error('Session creation timeout'));
+      }, 30000);
+
+      this.peer!.on('signal', (data) => {
+        clearTimeout(timeout);
+        this.signalData = data;
+        if (this.onSignalData) {
+          this.onSignalData(data);
+        }
+        resolve();
+      });
+    });
   }
 
   async joinSession(sessionId: string): Promise<void> {
     this.sessionId = sessionId;
     this.isInitiator = false;
+    this.connectionInfo.sessionId = sessionId;
+    this.connectionInfo.isInitiator = false;
+    
+    this.updateConnectionState('connecting');
     
     this.peer = new SimplePeer({
       initiator: false,
@@ -74,41 +121,62 @@ export class WebRTCService {
       config: {
         iceServers: [
           { urls: 'stun:stun.l.google.com:19302' },
-          { urls: 'stun:stun1.l.google.com:19302' }
+          { urls: 'stun:stun1.l.google.com:19302' },
+          { urls: 'stun:stun2.l.google.com:19302' }
         ]
       }
     });
 
     this.setupPeerEvents();
+    
+    return new Promise((resolve) => {
+      this.peer!.on('signal', (data) => {
+        this.signalData = data;
+        if (this.onSignalData) {
+          this.onSignalData(data);
+        }
+        resolve();
+      });
+    });
+  }
+
+  acceptSignal(signalData: any) {
+    if (this.peer && signalData) {
+      try {
+        this.peer.signal(signalData);
+      } catch (error) {
+        console.error('Error accepting signal:', error);
+        this.updateConnectionState('failed');
+      }
+    }
+  }
+
+  getSignalData() {
+    return this.signalData;
   }
 
   private setupPeerEvents() {
     if (!this.peer) return;
 
-    this.peer.on('signal', (data) => {
-      console.log('Signal data:', data);
-      // In a real app, this would be sent through the signaling server
-      // For demo, we'll simulate connection after a delay
-      setTimeout(() => {
-        if (this.onPeerConnected) {
-          this.onPeerConnected();
-        }
-      }, 2000);
-    });
-
     this.peer.on('connect', () => {
       console.log('Peer connected');
+      this.updateConnectionState('connected');
       if (this.onPeerConnected) {
         this.onPeerConnected();
       }
     });
 
     this.peer.on('data', (data) => {
-      this.handleIncomingData(data);
+      try {
+        this.handleIncomingData(data);
+      } catch (error) {
+        console.error('Error handling incoming data:', error);
+      }
     });
 
     this.peer.on('close', () => {
       console.log('Peer disconnected');
+      this.updateConnectionState('disconnected');
       if (this.onPeerDisconnected) {
         this.onPeerDisconnected();
       }
@@ -116,10 +184,11 @@ export class WebRTCService {
 
     this.peer.on('error', (err) => {
       console.error('Peer error:', err);
+      this.updateConnectionState('failed');
     });
   }
 
-  private handleIncomingData(data: ArrayBuffer) {
+  private handleIncomingData(data: Buffer) {
     const message: FileTransferData = JSON.parse(data.toString());
     
     switch (message.type) {
@@ -147,7 +216,8 @@ export class WebRTCService {
         speed: 0,
         startTime: Date.now(),
         isActive: true,
-        direction: 'receiving'
+        direction: 'receiving',
+        progress: 0
       }
     };
 
@@ -159,10 +229,20 @@ export class WebRTCService {
   private handleFileChunk(chunk: FileTransferData) {
     if (!this.currentTransfer) return;
 
-    this.currentTransfer.receivedChunks.set(chunk.chunkIndex!, chunk.data!);
-    this.currentTransfer.stats.bytesTransferred += chunk.data!.byteLength;
+    // Decode base64 data
+    const binaryString = atob(chunk.data!);
+    const bytes = new Uint8Array(binaryString.length);
+    for (let i = 0; i < binaryString.length; i++) {
+      bytes[i] = binaryString.charCodeAt(i);
+    }
 
-    // Calculate speed
+    this.currentTransfer.receivedChunks.set(chunk.chunkIndex!, bytes.buffer);
+    this.currentTransfer.stats.bytesTransferred += bytes.length;
+
+    // Calculate progress and speed
+    this.currentTransfer.stats.progress = 
+      (this.currentTransfer.stats.bytesTransferred / this.currentTransfer.stats.totalBytes) * 100;
+
     const elapsedTime = (Date.now() - this.currentTransfer.stats.startTime) / 1000;
     this.currentTransfer.stats.speed = this.currentTransfer.stats.bytesTransferred / elapsedTime;
 
@@ -179,7 +259,8 @@ export class WebRTCService {
       .sort(([a], [b]) => a - b)
       .map(([, data]) => data);
 
-    const fileData = new Uint8Array(chunks.reduce((acc, chunk) => acc + chunk.byteLength, 0));
+    const totalSize = chunks.reduce((acc, chunk) => acc + chunk.byteLength, 0);
+    const fileData = new Uint8Array(totalSize);
     let offset = 0;
     
     chunks.forEach(chunk => {
@@ -188,6 +269,7 @@ export class WebRTCService {
     });
 
     this.currentTransfer.stats.isActive = false;
+    this.currentTransfer.stats.progress = 100;
     
     if (this.onTransferProgress) {
       this.onTransferProgress(this.currentTransfer.stats);
@@ -205,7 +287,7 @@ export class WebRTCService {
       throw new Error('No peer connection');
     }
 
-    const CHUNK_SIZE = 64 * 1024; // 64KB chunks
+    const CHUNK_SIZE = 16 * 1024; // 16KB chunks for better reliability
     const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
 
     const stats: TransferStats = {
@@ -214,7 +296,8 @@ export class WebRTCService {
       speed: 0,
       startTime: Date.now(),
       isActive: true,
-      direction: 'sending'
+      direction: 'sending',
+      progress: 0
     };
 
     // Send file metadata
@@ -234,16 +317,26 @@ export class WebRTCService {
       const chunk = file.slice(start, end);
       
       const arrayBuffer = await chunk.arrayBuffer();
+      const bytes = new Uint8Array(arrayBuffer);
+      
+      // Convert to base64 for transmission
+      let binary = '';
+      for (let j = 0; j < bytes.length; j++) {
+        binary += String.fromCharCode(bytes[j]);
+      }
+      const base64Data = btoa(binary);
       
       const chunkMessage: FileTransferData = {
         type: 'file-chunk',
         chunkIndex: i,
-        data: arrayBuffer
+        data: base64Data
       };
 
       this.peer.send(JSON.stringify(chunkMessage));
       
       stats.bytesTransferred += arrayBuffer.byteLength;
+      stats.progress = (stats.bytesTransferred / stats.totalBytes) * 100;
+      
       const elapsedTime = (Date.now() - stats.startTime) / 1000;
       stats.speed = stats.bytesTransferred / elapsedTime;
 
@@ -252,7 +345,7 @@ export class WebRTCService {
       }
 
       // Small delay to prevent overwhelming the connection
-      await new Promise(resolve => setTimeout(resolve, 1));
+      await new Promise(resolve => setTimeout(resolve, 10));
     }
 
     // Send completion message
@@ -263,11 +356,14 @@ export class WebRTCService {
     this.peer.send(JSON.stringify(completeMessage));
     
     stats.isActive = false;
+    stats.progress = 100;
+    
     if (this.onTransferProgress) {
       this.onTransferProgress(stats);
     }
   }
 
+  // Event handlers
   onPeerConnect(callback: () => void) {
     this.onPeerConnected = callback;
   }
@@ -284,14 +380,37 @@ export class WebRTCService {
     this.onTransferProgress = callback;
   }
 
+  onConnectionStateUpdate(callback: (info: ConnectionInfo) => void) {
+    this.onConnectionStateChange = callback;
+  }
+
+  onSignal(callback: (data: any) => void) {
+    this.onSignalData = callback;
+  }
+
+  getConnectionInfo(): ConnectionInfo {
+    return { ...this.connectionInfo };
+  }
+
   disconnect() {
+    this.updateConnectionState('disconnected');
     if (this.peer) {
       this.peer.destroy();
       this.peer = null;
     }
-    if (this.ws) {
-      this.ws.close();
-      this.ws = null;
-    }
+    this.currentTransfer = null;
+    this.signalData = null;
+  }
+
+  formatBytes(bytes: number): string {
+    if (bytes === 0) return '0 Bytes';
+    const k = 1024;
+    const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+  }
+
+  formatSpeed(bytesPerSecond: number): string {
+    return this.formatBytes(bytesPerSecond) + '/s';
   }
 }
