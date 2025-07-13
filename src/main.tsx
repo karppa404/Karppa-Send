@@ -1,19 +1,16 @@
-
 import './index.css'
-import Index from './pages/index.tsx'
+import App from './App'
 import ReactDOM from "react-dom/client";
-import { BrowserRouter } from "react-router";
+import { BrowserRouter } from "react-router-dom";
 import { ThemeProvider } from "@/components/theme-provider"
-
 import { Toaster } from "@/components/ui/sonner"
 
 const root = document.getElementById("root");
 
 ReactDOM.createRoot(root!).render(
-
   <BrowserRouter>
     <ThemeProvider defaultTheme="dark" storageKey="vite-ui-theme">
-      <Index />
+      <App />
     </ThemeProvider>
     <Toaster />
   </BrowserRouter>
